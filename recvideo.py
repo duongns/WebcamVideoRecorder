@@ -8,12 +8,16 @@ from PIL import Image, ImageTk
 import time
 import queue
 import sys
+import json
 
 class VideoRecorderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Quay Video Đơn Hàng")
-        self.root.geometry("700x550")
+        self.root.geometry("680x680")  # Tăng chiều cao để có chỗ hiển thị thông tin
+        
+        # Đường dẫn file cấu hình
+        self.config_file = os.path.join(os.path.expanduser("~"), "video_recorder_config.json")
         
         # Biến trạng thái
         self.cap = None
@@ -32,8 +36,49 @@ class VideoRecorderApp:
         if not os.path.exists(self.videos_dir):
             os.makedirs(self.videos_dir)
         
+        # Load cấu hình đã lưu
+        self.load_settings()
+        
         self.setup_ui()
         self.initialize_camera()
+        
+    def load_settings(self):
+        """Load cấu hình đã lưu từ file JSON"""
+        self.default_settings = {
+            'save_path': self.videos_dir,
+        }
+        
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    self.settings = json.load(f)
+                print(f"Đã load cấu hình từ: {self.config_file}")
+                
+                # Validate settings
+                if 'save_path' not in self.settings or not os.path.exists(self.settings['save_path']):
+                    self.settings['save_path'] = self.default_settings['save_path']
+                    
+            else:
+                self.settings = self.default_settings.copy()
+                print("Sử dụng cấu hình mặc định")
+                
+        except Exception as e:
+            print(f"Lỗi load cấu hình: {e}")
+            self.settings = self.default_settings.copy()
+    
+    def save_settings(self):
+        """Lưu cấu hình hiện tại vào file JSON"""
+        try:
+            current_settings = {
+                'save_path': self.path_var.get(),
+            }
+            
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(current_settings, f, ensure_ascii=False, indent=2)
+            print(f"Đã lưu cấu hình vào: {self.config_file}")
+            
+        except Exception as e:
+            print(f"Lỗi lưu cấu hình: {e}")
         
     def setup_ui(self):
         # Frame chính
@@ -55,6 +100,10 @@ class VideoRecorderApp:
         self.title_var = tk.StringVar()
         self.title_entry = ttk.Entry(title_frame, textvariable=self.title_var, width=50)
         self.title_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+        
+        # Nút paste từ clipboard
+        self.paste_btn = ttk.Button(title_frame, text="Dán tiêu đề", command=self.paste_from_clipboard, width=12)
+        self.paste_btn.grid(row=0, column=2, padx=(5, 0))
         
         # Frame cho video preview
         video_frame = ttk.LabelFrame(main_frame, text="Preview", padding="5")
@@ -92,13 +141,41 @@ class VideoRecorderApp:
         
         ttk.Label(path_frame, text="Thư mục lưu:").grid(row=0, column=0, sticky=tk.W)
         self.path_var = tk.StringVar()
-        self.path_var.set(self.videos_dir)
+        self.path_var.set(self.settings.get('save_path', self.videos_dir))
         ttk.Label(path_frame, textvariable=self.path_var, foreground="gray").grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0))
+        
+        # Frame mới cho thông tin video đã lưu
+        info_frame = ttk.LabelFrame(main_frame, text="Thông tin", padding="5")
+        info_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        info_frame.columnconfigure(0, weight=1)
+        
+        # Tạo Text widget với scrollbar để hiển thị thông tin video
+        text_frame = ttk.Frame(info_frame)
+        text_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        text_frame.columnconfigure(0, weight=1)
+        
+        self.info_text = tk.Text(text_frame, height=5, wrap=tk.WORD, state=tk.DISABLED)
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.info_text.yview)
+        self.info_text.configure(yscrollcommand=scrollbar.set)
+        
+        self.info_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Khởi tạo với thông báo trống
+        self.update_info_display("")
+        
+    def update_info_display(self, message):
+        """Cập nhật thông tin hiển thị trong info_text"""
+        self.info_text.config(state=tk.NORMAL)
+        self.info_text.delete(1.0, tk.END)
+        if message:
+            self.info_text.insert(1.0, message)
+        self.info_text.config(state=tk.DISABLED)
         
     def initialize_camera(self):
         """Khởi tạo webcam với cấu hình tối ưu cho Rapoo"""
         backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
-        camera_index = 2  # Chỉ sử dụng webcam
+        camera_index = 0  # Chỉ sử dụng webcam
         
         for backend in backends:
             try:
@@ -118,7 +195,7 @@ class VideoRecorderApp:
                         if ret and frame is not None and frame.size > 0:
                             self.cap = cap
                             
-                            # Lấy thông tin camera hiện tại
+                            # Lấu thông tin camera hiện tại
                             current_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                             current_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                             
@@ -128,8 +205,8 @@ class VideoRecorderApp:
                             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
                             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
                             
-                            # Cấu hình FPS - thử 25 FPS trước cho ổn định
-                            self.cap.set(cv2.CAP_PROP_FPS, 25)
+                            # Cấu hình FPS - sử dụng 20 FPS mặc định
+                            self.cap.set(cv2.CAP_PROP_FPS, 20)
                             
                             # Cấu hình thêm cho webcam Rapoo
                             self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
@@ -261,7 +338,7 @@ class VideoRecorderApp:
         return frame
         
     def start_recording(self):
-        """Bắt đầu quay video"""
+        """Bắt đầu quay video với cấu hình mặc định tối ưu"""
         if not self.cap or not self.cap.isOpened():
             messagebox.showerror("Lỗi", "Camera không được kết nối!")
             return
@@ -281,12 +358,13 @@ class VideoRecorderApp:
         actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frame_size = (actual_width, actual_height)
         
-        # Sử dụng FPS cố định 25 cho ổn định
-        target_fps = 25.0
+        # Sử dụng FPS cố định 20 cho cấu hình tối ưu
+        target_fps = 20.0
         
         print(f"Ghi video với độ phân giải: {frame_size}, FPS: {target_fps}")
         
-        # Khởi tạo VideoWriter với codec mp4v
+        # Khởi tạo VideoWriter với codec H.264 và nén cao
+        # Sử dụng mp4v với cấu hình nén cao để giảm dung lượng
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         
         self.out = cv2.VideoWriter(self.video_path, fourcc, target_fps, frame_size)
@@ -313,16 +391,46 @@ class VideoRecorderApp:
         self.stop_btn.config(state=tk.NORMAL)
         self.title_entry.config(state=tk.DISABLED)
         
-        self.status_var.set("Đang quay video...")
+        # Lưu thời gian bắt đầu recording để tính độ dài video
+        self.recording_start_time = time.time()
+        
+        self.status_var.set("Đang quay video (FPS: 20, 1080p, nén cao)...")
+        
+        # Cập nhật thông tin bắt đầu quay
+        self.update_info_display("Đã bắt đầu quay video...")
         
         # Bắt đầu luồng ghi video
         self.record_thread = threading.Thread(target=self.record_video, daemon=True)
         self.record_thread.start()
         
+    def paste_from_clipboard(self):
+        """Paste text từ clipboard vào title entry"""
+        try:
+            # Lấy text từ clipboard
+            clipboard_text = self.root.clipboard_get()
+            if clipboard_text:
+                # Làm sạch text (loại bỏ ký tự xuống dòng và khoảng trắng thừa)
+                cleaned_text = clipboard_text.strip().replace('\n', ' ').replace('\r', ' ')
+                # Chỉ giữ lại ký tự hợp lệ cho tên file
+                safe_text = "".join(c for c in cleaned_text if c.isalnum() or c in (' ', '_', '-', '.', '(', ')')).strip()
+                if safe_text:
+                    self.title_var.set(safe_text)
+                    # Focus vào entry để người dùng có thể chỉnh sửa
+                    self.title_entry.focus()
+                    self.title_entry.icursor(tk.END)  # Đặt con trỏ ở cuối
+                else:
+                    messagebox.showwarning("Cảnh báo", "Clipboard không chứa text hợp lệ cho tên file!")
+            else:
+                messagebox.showinfo("Thông báo", "Clipboard trống!")
+        except tk.TclError:
+            messagebox.showerror("Lỗi", "Không thể đọc từ clipboard!")
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Lỗi khi paste từ clipboard: {e}")
+        
     def record_video(self):
         """Ghi video từ frame queue với timing chính xác"""
         frame_count = 0
-        target_fps = 25.0
+        target_fps = 20.0  # FPS mặc định
         frame_interval = 1.0 / target_fps
         start_time = time.time()
         next_frame_time = start_time
@@ -391,6 +499,12 @@ class VideoRecorderApp:
     def stop_recording(self):
         """Dừng quay video"""
         print("Đang dừng quay video...")
+        # Lưu thời gian kết thúc để tính độ dài video
+        if hasattr(self, 'recording_start_time'):
+            recording_duration = time.time() - self.recording_start_time
+        else:
+            recording_duration = 0
+            
         self.recording = False
         
         # Đợi thread ghi video kết thúc
@@ -428,21 +542,40 @@ class VideoRecorderApp:
         if os.path.exists(self.video_path):
             file_size = os.path.getsize(self.video_path)
             if file_size > 0:
-                messagebox.showinfo("Thành công", f"Video đã được lưu tại:\n{self.video_path}\nKích thước: {file_size/1024/1024:.1f} MB")
+                # Chuyển đổi thời gian thành định dạng mm:ss
+                minutes = int(recording_duration // 60)
+                seconds = int(recording_duration % 60)
+                duration_str = f"{minutes:02d}:{seconds:02d}"
+                
+                # Hiển thị thông tin trực tiếp trên cửa sổ thay vị messagebox
+                info_message = f"✅ Video đã được lưu thành công!\n"
+                info_message += f"📁 Đường dẫn: {self.video_path}\n"
+                info_message += f"📏 Kích thước: {file_size/1024/1024:.1f} MB\n"
+                info_message += f"⚙️ Cấu hình: 20 FPS, 1080p, nén cao\n"
+                info_message += f"⏱️ Độ dài: {duration_str}"
+                
+                self.update_info_display(info_message)
             else:
-                messagebox.showerror("Lỗi", "File video được tạo nhưng có kích thước 0 bytes!")
+                error_message = "❌ Lỗi: File video được tạo nhưng có kích thước 0 bytes!"
+                self.update_info_display(error_message)
         else:
-            messagebox.showerror("Lỗi", "Không thể tạo file video!")
+            error_message = "❌ Lỗi: Không thể tạo file video!"
+            self.update_info_display(error_message)
         
     def browse_folder(self):
         """Chọn thư mục lưu video"""
         folder = filedialog.askdirectory(initialdir=self.path_var.get())
         if folder:
             self.path_var.set(folder)
+            # Tự động lưu đường dẫn mới
+            self.save_settings()
             
     def on_closing(self):
         """Xử lý khi đóng ứng dụng"""
         print("Đang đóng ứng dụng...")
+        
+        # Lưu cấu hình cuối cùng
+        self.save_settings()
         
         # Dừng recording nếu đang quay
         if self.recording:
